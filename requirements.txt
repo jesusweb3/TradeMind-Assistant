@@ -4,11 +4,14 @@
 # Telegram Bot (aiogram 3.x)
 aiogram==3.24.0
 
-# HTTP клиент (для наших API запросов)
+# HTTP клиент (для API запросов)
 requests==2.32.3
 
 # Обработка изображений
 Pillow==12.1.0
+
+# Распознавание речи (Faster Whisper)
+faster-whisper==1.1.0
 
 # Google Services
 # gspread==6.2.1

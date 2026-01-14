@@ -34,6 +34,7 @@ class Config:
     
     # OpenRouter
     OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "google/gemini-2.5-flash")
     
     # Google
     GOOGLE_SHEET_ID: str = os.getenv("GOOGLE_SHEET_ID", "")

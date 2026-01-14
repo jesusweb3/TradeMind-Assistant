@@ -2,7 +2,9 @@
 Обработчики команд и сообщений бота.
 """
 
-import io
+import os
+import tempfile
+from pathlib import Path
 
 from aiogram import Router, F, Bot
 from aiogram.filters import CommandStart, Command
@@ -12,7 +14,9 @@ from aiogram.fsm.context import FSMContext
 from bot.keyboards import get_main_menu, get_done_keyboard, get_cancel_keyboard
 from bot.states import TradeStates
 from bot.texts import WELCOME, MAIN_MENU, HELP
-from services.image_processor import create_vertical_collage
+from services.image_processor import create_collage_with_header, TradeHeader
+from services.llm_processor import extract_trade_info
+from services.speech_to_text import transcribe_audio
 from utils.logger import get_logger
 
 # Инициализируем логгер
@@ -108,7 +112,7 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
     await show_main_menu(message)
 
 
-# ==================== ОБРАБОТКА СКРИНШОТОВ ====================
+# ==================== ШАГ 1: СКРИНШОТЫ ====================
 
 @router.message(TradeStates.waiting_for_screenshots, F.photo)
 async def handle_screenshot(message: Message, state: FSMContext) -> None:
@@ -132,7 +136,7 @@ async def handle_screenshot(message: Message, state: FSMContext) -> None:
 
 @router.message(TradeStates.waiting_for_screenshots, F.text == "✅ Готово")
 async def finish_screenshots(message: Message, state: FSMContext, bot: Bot) -> None:
-    """Завершение загрузки скриншотов — создаём коллаж."""
+    """Завершение загрузки скриншотов — переходим к запросу информации."""
     data = await state.get_data()
     screenshots = data.get("screenshots", [])
     
@@ -145,11 +149,10 @@ async def finish_screenshots(message: Message, state: FSMContext, bot: Bot) -> N
     
     logger.info(f"Пользователь {message.from_user.id} завершил загрузку ({len(screenshots)} скриншотов)")
     
-    # Уведомляем о начале обработки
-    processing_msg = await message.answer("⏳ Создаю коллаж...")
+    # Скачиваем изображения заранее
+    processing_msg = await message.answer("⏳ Обрабатываю скриншоты...")
     
     try:
-        # Скачиваем все изображения
         images_bytes: list[bytes] = []
         for i, file_id in enumerate(screenshots):
             file = await bot.get_file(file_id)
@@ -157,13 +160,126 @@ async def finish_screenshots(message: Message, state: FSMContext, bot: Bot) -> N
             images_bytes.append(file_data.read())
             logger.info(f"Скачано изображение #{i+1}/{len(screenshots)}")
         
-        # Создаём коллаж
-        collage_bytes = create_vertical_collage(images_bytes)
+        # Сохраняем байты изображений в state
+        await state.update_data(images_bytes=images_bytes)
         
-        # Сохраняем коллаж в state для дальнейшего использования
-        await state.update_data(collage=collage_bytes)
+        await processing_msg.delete()
         
-        # Отправляем коллаж пользователю
+        # Переходим к запросу информации о сделке
+        await state.set_state(TradeStates.waiting_for_trade_info)
+        await message.answer(
+            "📝 <b>Отлично!</b> Скриншоты получены.\n\n"
+            "Теперь расскажи о сделке:\n"
+            "• <b>Актив</b> (например: BTC, ETH)\n"
+            "• <b>Сценарий</b> (ЛП, Пробой, Ретест...)\n"
+            "• <b>Дата</b> сделки\n\n"
+            "🎤 Отправь голосовое или напиши текстом.",
+            reply_markup=get_cancel_keyboard(),
+            parse_mode="HTML",
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка обработки скриншотов: {e}")
+        await processing_msg.edit_text("❌ Ошибка обработки. Попробуй ещё раз.")
+        await state.clear()
+        await show_main_menu(message)
+
+
+# ==================== ШАГ 2: ИНФОРМАЦИЯ О СДЕЛКЕ ====================
+
+@router.message(TradeStates.waiting_for_trade_info, F.voice)
+async def handle_voice_info(message: Message, state: FSMContext, bot: Bot) -> None:
+    """Обработка голосового сообщения с информацией о сделке."""
+    logger.info(f"Пользователь {message.from_user.id} отправил голосовое сообщение")
+    
+    processing_msg = await message.answer("🎤 Распознаю речь...")
+    
+    try:
+        # Скачиваем голосовое сообщение
+        voice = message.voice
+        file = await bot.get_file(voice.file_id)
+        file_data = await bot.download_file(file.file_path)
+        
+        # Сохраняем во временный файл
+        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp_file:
+            tmp_file.write(file_data.read())
+            tmp_path = tmp_file.name
+        
+        try:
+            # Транскрибируем
+            text = transcribe_audio(tmp_path)
+            logger.info(f"Распознанный текст: {text}")
+            
+            await processing_msg.edit_text(f"🎤 Распознано:\n<i>{text}</i>")
+            
+            # Обрабатываем текст через LLM
+            await _process_trade_info(message, state, text)
+            
+        finally:
+            # Удаляем временный файл
+            Path(tmp_path).unlink(missing_ok=True)
+        
+    except Exception as e:
+        logger.error(f"Ошибка обработки голосового: {e}")
+        await processing_msg.edit_text(
+            "❌ Не удалось распознать речь.\n"
+            "Попробуй ещё раз или напиши текстом."
+        )
+
+
+@router.message(TradeStates.waiting_for_trade_info, F.text)
+async def handle_text_info(message: Message, state: FSMContext) -> None:
+    """Обработка текстового описания сделки."""
+    text = message.text
+    
+    # Игнорируем кнопку отмены (она обрабатывается отдельно)
+    if text == "❌ Отмена":
+        return
+    
+    logger.info(f"Пользователь {message.from_user.id} отправил текст: {text}")
+    
+    await _process_trade_info(message, state, text)
+
+
+async def _process_trade_info(message: Message, state: FSMContext, text: str) -> None:
+    """Общая логика обработки информации о сделке."""
+    processing_msg = await message.answer("🤖 Анализирую данные...")
+    
+    try:
+        # Извлекаем информацию через LLM
+        trade_info = extract_trade_info(text)
+        
+        if not trade_info:
+            await processing_msg.edit_text(
+                "❌ Не удалось извлечь данные.\n"
+                "Попробуй описать подробнее: актив, сценарий, дату."
+            )
+            return
+        
+        logger.info(f"Извлечено: {trade_info.asset}, {trade_info.scenario}, {trade_info.date}")
+        
+        # Получаем сохранённые изображения
+        data = await state.get_data()
+        images_bytes = data.get("images_bytes", [])
+        
+        if not images_bytes:
+            await processing_msg.edit_text("❌ Изображения не найдены. Начни сначала.")
+            await state.clear()
+            await show_main_menu(message)
+            return
+        
+        await processing_msg.edit_text("🖼 Создаю коллаж...")
+        
+        # Создаём коллаж с заголовком
+        header = TradeHeader(
+            asset=trade_info.asset,
+            scenario=trade_info.scenario,
+            date=trade_info.date
+        )
+        
+        collage_bytes = create_collage_with_header(images_bytes, header)
+        
+        # Отправляем коллаж
         collage_file = BufferedInputFile(
             file=collage_bytes,
             filename="trade_collage.jpg"
@@ -171,47 +287,21 @@ async def finish_screenshots(message: Message, state: FSMContext, bot: Bot) -> N
         
         await message.answer_photo(
             photo=collage_file,
-            caption=f"🖼 <b>Коллаж готов!</b>\n📸 Склеено изображений: {len(screenshots)}"
+            caption=(
+                f"📊 <b>Сделка готова!</b>\n\n"
+                f"📈 Актив: <b>{trade_info.asset}</b>\n"
+                f"📋 Сценарий: <b>{trade_info.scenario}</b>\n"
+                f"📅 Дата: <b>{trade_info.date}</b>"
+            ),
+            parse_mode="HTML"
         )
         
-        # Удаляем сообщение "Создаю коллаж..."
         await processing_msg.delete()
         
-        # Переходим к описанию
-        await state.set_state(TradeStates.waiting_for_description)
-        await message.answer(
-            "🎤 Теперь опиши сделку:\n"
-            "• Отправь голосовое сообщение, или\n"
-            "• Напиши текстом",
-            reply_markup=get_cancel_keyboard(),
-        )
-        
-    except Exception as e:
-        logger.error(f"Ошибка создания коллажа: {e}")
-        await processing_msg.edit_text("❌ Ошибка при создании коллажа. Попробуй ещё раз.")
+        # Завершаем
         await state.clear()
         await show_main_menu(message)
-
-
-# ==================== ОБРАБОТКА ОПИСАНИЯ ====================
-
-@router.message(TradeStates.waiting_for_description)
-async def handle_description(message: Message, state: FSMContext) -> None:
-    """Обработка описания сделки (заглушка)."""
-    # TODO: Обработка голосовых (voice) и текстовых сообщений
-    
-    if message.voice:
-        logger.info(f"Пользователь {message.from_user.id} отправил голосовое сообщение")
-        await message.answer(
-            "🎤 Голосовое сообщение получено!\n"
-            "🚧 Распознавание речи в разработке...",
-        )
-    else:
-        logger.info(f"Пользователь {message.from_user.id} отправил текстовое описание")
-        await message.answer(
-            f"📝 Описание получено: {message.text}\n"
-            "🚧 Обработка данных в разработке...",
-        )
-    
-    await state.clear()
-    await show_main_menu(message)
+        
+    except Exception as e:
+        logger.error(f"Ошибка обработки информации: {e}")
+        await processing_msg.edit_text("❌ Ошибка обработки. Попробуй ещё раз.")
