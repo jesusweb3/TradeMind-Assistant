@@ -19,10 +19,8 @@ from services.llm_processor import extract_trade_info
 from services.speech_to_text import transcribe_audio
 from utils.logger import get_logger
 
-# Инициализируем логгер
 logger = get_logger(__name__)
 
-# Создаём роутер для обработчиков
 router = Router()
 
 
@@ -120,7 +118,6 @@ async def handle_screenshot(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     screenshots = data.get("screenshots", [])
     
-    # Берём фото максимального качества
     photo = message.photo[-1]
     screenshots.append(photo.file_id)
     

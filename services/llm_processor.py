@@ -25,7 +25,7 @@ class TradeInfo:
     raw_text: str       # Исходный текст
 
 
-SYSTEM_PROMPT = """Ты помощник криптовалютного трейдера. Твоя задача — извлечь из текста информацию о сделке.
+SYSTEM_PROMPT = """Ты помощник криптовалютного фьючерсного трейдера. Твоя задача — извлечь из текста информацию о сделке.
 
 Извлеки:
 1. Актив (тикер) — формат: BTC/USDT, ETH/USDT и т.д.
@@ -81,7 +81,6 @@ def extract_trade_info(text: str) -> Optional[TradeInfo]:
         answer = response.json()['choices'][0]['message']['content']
         logger.info(f"Ответ LLM: {answer}")
         
-        # Парсим JSON из ответа
         data = _parse_json_response(answer)
         
         if data:
@@ -104,13 +103,11 @@ def extract_trade_info(text: str) -> Optional[TradeInfo]:
 
 def _parse_json_response(text: str) -> Optional[dict]:
     """Извлекает JSON из ответа LLM."""
-    # Пробуем напрямую
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
     
-    # Ищем JSON в тексте
     json_match = re.search(r'\{[^{}]+\}', text)
     if json_match:
         try:
