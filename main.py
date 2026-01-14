@@ -10,7 +10,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-from config import config
+from utils.config import config
 from bot.handlers import router
 from bot.middlewares import AccessMiddleware
 from utils.logger import get_logger

@@ -7,7 +7,7 @@ from typing import Any, Awaitable, Callable
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, Message, CallbackQuery
 
-from config import config
+from utils.config import config
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
