@@ -1,0 +1,18 @@
+# TradeMind-Assistant Dependencies
+# Python 3.13+
+
+# Telegram Bot (aiogram 3.x)
+aiogram==3.24.0
+
+# HTTP клиент (для наших API запросов)
+requests==2.32.3
+
+# Обработка изображений
+Pillow==12.1.0
+
+# Google Services
+# gspread==6.2.1
+# PyDrive2==1.21.3
+
+# Переменные окружения
+python-dotenv==1.2.1

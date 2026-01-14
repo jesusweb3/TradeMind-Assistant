@@ -1,0 +1,40 @@
+﻿# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Environment variables (SECRETS!)
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# Temp files
+temp_*
+*.tmp
+
+# Google credentials (SECRET!)
+service-account.json
+
+# Local data
+data/
+*.db
+*.sqlite
+
+# OS files
+.DS_Store
+Thumbs.db
